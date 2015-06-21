@@ -94,9 +94,56 @@ bool HMC5883_init()
 // set mag offsets
 void HMC5883_set_offset(int offsetx, int offsety, int offsetz)
 {
-  mag_offset[0] = offsetx;
-  mag_offset[1] = offsety;
-  mag_offset[2] = offsetz;
+  mag_cal.mag_offset[0] = offsetx;
+  mag_cal.mag_offset[1] = offsety;
+  mag_cal.mag_offset[2] = offsetz;
+}
+
+void HMC5883_calib_start()
+{
+   mag_max[0] = mag_max[1] = mag_max[2] = 0;
+   mag_min[0] = mag_min[1] = mag_min[2] = 0;
+   
+   mag_calibrating = true;
+}
+
+/* credit to 
+   http://www.camelsoftware.com/firetail/blog/uavs/3-axis-magnetometer-calibration-a-simple-technique-for-hard-soft-errors/
+   for this bit */
+
+void HMC5883_calib_stop()
+{
+   float vmax[3];
+   float vmin[3];
+   float avgs[3];
+   
+   vmax[0] = mag_max[0] - ((mag_min[0] + mag_max[0])/2.0);
+   vmax[1] = mag_max[1] - ((mag_min[1] + mag_max[1])/2.0);
+   vmax[2] = mag_max[2] - ((mag_min[2] + mag_max[2])/2.0);
+
+   vmin[0] = mag_min[0] - ((mag_min[0] + mag_max[0])/2.0);
+   vmin[1] = mag_min[1] - ((mag_min[1] + mag_max[1])/2.0);
+   vmin[2] = mag_min[2] - ((mag_min[2] + mag_max[2])/2.0);
+
+   //The average distance from the centre is now calculated. We want to know how far from the centre, so the negative values are inverted.
+   avgs[0] = (mag_max[0] - mag_min[0])/2;
+   avgs[1] = (mag_max[1] - mag_min[1])/2;
+   avgs[2] = (mag_max[2] - mag_min[2])/2;
+
+   //The components are now averaged out
+   float avg_rad = avgs[0] + avgs[1] + avgs[2];
+   avg_rad /= 3.0;
+
+   //Finally calculate the scale factor by dividing average radius by average value for that axis.
+   mag_cal.mag_offset[0] = (mag_min[0] + mag_max[0])/2.0;
+   mag_cal.mag_offset[1] = (mag_min[1] + mag_max[1])/2.0;
+   mag_cal.mag_offset[2] = (mag_min[2] + mag_max[2])/2.0;
+
+   mag_cal.mag_scale[0] = (avg_rad/avgs[0]);
+   mag_cal.mag_scale[1] = (avg_rad/avgs[1]);
+   mag_cal.mag_scale[2] = (avg_rad/avgs[2]);
+
+   mag_calibrating = false;
 }
 
 // Read Sensor data in chip axis
@@ -120,9 +167,27 @@ void HMC5883_read()
 
   if (i==6){  // All bytes received?
     // MSB byte first, then LSB
-    mag_x = ((((int)buff[0]) << 8) | buff[1])*SENSOR_SIGN[6] + mag_offset[0];    // X axis
-    mag_y = ((((int)buff[4]) << 8) | buff[5])*SENSOR_SIGN[7] + mag_offset[1];    // Y axis
-    mag_z = ((((int)buff[2]) << 8) | buff[3])*SENSOR_SIGN[8] + mag_offset[2];    // Z axis
+    mag_x = ((((int)buff[0]) << 8) | buff[1])*SENSOR_SIGN[6] - mag_cal.mag_offset[0];    // X axis
+    mag_y = ((((int)buff[4]) << 8) | buff[5])*SENSOR_SIGN[7] - mag_cal.mag_offset[1];    // Y axis
+    mag_z = ((((int)buff[2]) << 8) | buff[3])*SENSOR_SIGN[8] - mag_cal.mag_offset[2];    // Z axis
+
+	if (true == mag_calibrating)
+	{
+	   if (mag_x > mag_max[0]) { mag_max[0] = mag_x; }
+	   else if (mag_x < mag_min[0]) { mag_min[0] = mag_x; }
+
+	   if (mag_y > mag_max[1]) { mag_max[1] = mag_y; }
+	   else if (mag_y < mag_min[1]) { mag_min[1] = mag_y; }
+
+	   if (mag_z > mag_max[2]) { mag_max[2] = mag_z; }
+	   else if (mag_z < mag_min[2]) { mag_min[2] = mag_z; }
+	}
+	else
+	{
+	   mag_x *= mag_cal.mag_scale[0];
+	   mag_y *= mag_cal.mag_scale[1];
+	   mag_z *= mag_cal.mag_scale[2];
+	}
   }
 }
 

@@ -79,7 +79,7 @@ void printdata(void)
 	Serial.print (",MGZ:");
 	Serial.print(mag_z);
 	Serial.print (",MGH:");
-	Serial.print((float)ToDeg(Heading));
+	Serial.print((float)180 + ToDeg(Heading));
 	Serial.print (",");
 #endif
 #endif
@@ -304,5 +304,33 @@ void printPerfData(long time)
 long convert_to_dec(float x)
 {
   return x*10000000;
+}
+
+void dumpMagCalibration(void)
+{
+  Serial.print("***mag offsets [x ");
+  Serial.print(mag_cal.mag_offset[0]);
+  Serial.print(", y");
+  Serial.print(mag_cal.mag_offset[1]);
+  Serial.print(", z");
+  Serial.print(mag_cal.mag_offset[2]);
+  Serial.print("], scaling [x ");
+  Serial.print(mag_cal.mag_scale[0]);
+  Serial.print(", y");
+  Serial.print(mag_cal.mag_scale[1]);
+  Serial.print(", z");
+  Serial.print(mag_cal.mag_scale[2]);
+  Serial.println("]");
+}
+
+void dumpAnalogueCalibration(void)
+{
+	Serial.print("***Analogue offsets [ ");
+	for (int i=0; i < (sizeof(AN_OFFSET)/sizeof(AN_OFFSET[0])); i++)
+	{
+		Serial.print(AN_OFFSET[i]);
+		Serial.print(" ");
+	}
+	Serial.println(" ]");
 }
 

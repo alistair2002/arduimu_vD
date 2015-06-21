@@ -53,7 +53,7 @@
 
 #define PRINT_DCM 0     //Will print the whole direction cosine matrix
 #define PRINT_ANALOGS 0 //Will print the analog raw data
-#define PRINT_EULER 0   //Will print the Euler angles Roll, Pitch and Yaw
+#define PRINT_EULER 1   //Will print the Euler angles Roll, Pitch and Yaw
 #define PRINT_GPS 1     //Will print GPS data
 #define PRINT_MAGNETOMETER 1     //Will print Magnetometer data (if magnetometer is enabled)
 
@@ -163,8 +163,8 @@ long timer_old;
 long timer24=0; //Second timer used to print values 
 boolean groundstartDone = false;    // Used to not repeat ground start
 
-float AN[8]; //array that store the 6 ADC filtered data
-float AN_OFFSET[8]; //Array that stores the Offset of the gyros
+float AN[8] = {}; //array that store the 6 ADC filtered data
+float AN_OFFSET[8] = {}; //Array that stores the Offset of the gyros
 
 float Accel_Vector[3]= {0,0,0}; //Store the acceleration in a vector
 float Gyro_Vector[3]= {0,0,0};//Store the gyros rutn rate in a vector
@@ -256,7 +256,19 @@ volatile uint8_t analog_count[8];
  int mag_x;
  int mag_y;
  int mag_z;
- int mag_offset[3];
+
+ typedef struct {
+	 int mag_offset[3];
+	 float mag_scale[3];
+ } mag_nvs_t;
+
+ mag_nvs_t mag_cal = {
+	 .mag_offset = {},
+	 .mag_scale = {1.0, 1.0, 1.0}
+ };
+ int mag_max[3] = {};
+ int mag_min[3] = {};
+ int mag_calibrating = true;
  float Heading;
  float Heading_X;
  float Heading_Y;
@@ -315,8 +327,9 @@ void setup()
       debug_handler(3);
   #endif
 
-  if(ENABLE_AIR_START){
-      debug_handler(1);
+  if (HIGH == digitalRead(GROUNDSTART_PIN))
+  {
+	  debug_handler(1);
       startup_air();
   }else{
       debug_handler(2);
@@ -360,7 +373,7 @@ void loop() //Main Loop
    
     Euler_angles();
     
-	printdata(); // output data at 50Hz
+	//printdata(); // output data at 50Hz
 
     //Turn on the LED when you saturate any of the gyros.
     if((abs(Gyro_Vector[0])>=ToRad(300))||(abs(Gyro_Vector[1])>=ToRad(300))||(abs(Gyro_Vector[2])>=ToRad(300)))
@@ -382,19 +395,25 @@ void loop() //Main Loop
 				break;
 				
 			case(1):
-				
-				
-				break;
-				
-			case(2):
-				
-				break;
-				
-			case(3):
+	
 #if USE_MAGNETOMETER==1
 				HMC5883_read();                   // Read magnetometer
 				HMC5883_calculate(roll, pitch);   // Calculate heading 
 #endif
+				break;
+				
+			case(2):
+				if (HIGH == digitalRead(GROUNDSTART_PIN))
+				{
+					printdata(); // output data at 50Hz
+				}
+				else
+				{
+					Serial.println("Groundstart");
+				}
+				break;
+				
+			case(3):
 				break;
 			
 			case(4):
@@ -430,7 +449,6 @@ void loop() //Main Loop
 //********************************************************************************
 void startup_ground(void)
 {
-	uint16_t store=0;
 	int flashcount = 0;
  
 	debug_handler(2);
@@ -479,44 +497,94 @@ void startup_ground(void)
 	digitalWrite(YELLOW_LED_PIN,LOW);
 	
 	AN_OFFSET[5]-=GRAVITY*SENSOR_SIGN[5];
-  
-	for(int y=0; y<=5; y++)
+
+	/* store the offset in EEPROM */
 	{
-		Serial.println(AN_OFFSET[y]);
-                #if BOARD_VERSION < 3
-		store = ((AN_OFFSET[y]-200.f)*100.0f);
-                #endif
-                #if BOARD_VERSION == 3
-                store = AN_OFFSET[y];
-                #endif
-		eeprom_busy_wait();
-		eeprom_write_word((uint16_t *)	(y*2+2), store);	
+#if BOARD_VERSION < 3
+		uint16_t store=0;
+
+		for(int y=0; y<=5; y++)
+		{
+			store = ((AN_OFFSET[y]-200.f)*100.0f);
+			eeprom_busy_wait();
+			eeprom_write_word((uint16_t *)	(y*2+2), store);	
+		}
+#endif
+#if BOARD_VERSION == 3
+		uint8_t *an_cal_ptr = (uint8_t*)AN_OFFSET;
+
+		for(int y=0; y<=sizeof(AN_OFFSET); y++)
+		{
+			eeprom_busy_wait();
+			eeprom_write_byte((uint8_t *)	(y+2), an_cal_ptr[y]);	
+		}
+#endif
 	}
 
-	
+	/* wait until we are setup for calibrating the magnetometer */
+	digitalWrite(BLUE_LED_PIN,HIGH);
+	digitalWrite(YELLOW_LED_PIN,LOW);
+	while (LOW == digitalRead(GROUNDSTART_PIN));
+	digitalWrite(BLUE_LED_PIN,LOW);
+	digitalWrite(YELLOW_LED_PIN,HIGH);
+
+	/* store the magnetometer offsets */
+	{
+		uint8_t *mag_cal_ptr = (uint8_t*)&mag_cal;
+
+		/* calibrate the compass */
+		HMC5883_calib_start();
+		for(int i=0;i<10000;i++)
+		{
+			delay(10);
+
+			HMC5883_read();
+		}
+		
+		HMC5883_calib_stop();
+		
+		for (int y=0; y<sizeof(mag_nvs_t); y++)
+		{
+			eeprom_busy_wait();
+			eeprom_write_byte((uint8_t *)	(y+sizeof(AN_OFFSET)+2), mag_cal_ptr[y]);
+		}
+	}
 
 	groundstartDone = true;
 	debug_handler(6);
+	dumpAnalogueCalibration();
+	dumpMagCalibration();
 }
 
 //************************************************************************************
 void startup_air(void)
 {
   uint16_t temp=0;
+  uint8_t *mag_cal_ptr = (uint8_t*)&mag_cal;
+  uint8_t *an_cal_ptr = (uint8_t*)AN_OFFSET;
 
+#if BOARD_VERSION < 3
   for(int y=0; y<=5; y++)
   {
     eeprom_busy_wait();
     temp = eeprom_read_word((uint16_t *)	(y*2+2));
-    #if BOARD_VERSION < 3
     AN_OFFSET[y] = temp/100.f+200.f;
-    #endif
-    #if BOARD_VERSION == 3
-    AN_OFFSET[y] = temp;
-    #endif	
-    Serial.println(AN_OFFSET[y]);
+  }
+#endif
+#if BOARD_VERSION == 3
+  for(int y=0; y<=sizeof(AN_OFFSET); y++)
+  {
+	  an_cal_ptr[y] = eeprom_read_byte((uint8_t *)	(y+2));
+  }
+#endif	
+
+  for (int y=0; y<sizeof(mag_nvs_t); y++)
+  {
+	  mag_cal_ptr[y] = eeprom_read_byte((uint8_t *)	(y+sizeof(AN_OFFSET)+2));
   }
   Serial.println("***Air Start complete");
+  dumpAnalogueCalibration();
+  dumpMagCalibration();
 }    
 
 
